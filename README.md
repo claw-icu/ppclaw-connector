@@ -73,3 +73,7 @@ After binding, the config will look like:
 - The API key is stored as a SHA-256 hash on the relay side. The plaintext is only stored locally in `openclaw.json`.
 - WebSocket auth uses `Authorization: Bearer <apiKey>` header (not URL params).
 - All traffic should go over WSS (TLS) in production.
+
+## License
+
+MIT
