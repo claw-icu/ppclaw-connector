@@ -11,6 +11,10 @@ module.exports = {
     let failedNodes = [];
     let retryDelay = 1000;
 
+    // Get agent info
+    const agentId = context.agent?.id || 'main';
+    const agentName = context.agent?.name || config.agentName || 'Agent';
+
     // Fetch relay.json from discovery URL
     async function fetchRelays() {
       const discoveryUrl = config.discoveryUrl || 'https://api.claw.icu/relay.json';
@@ -112,13 +116,14 @@ module.exports = {
           return;
         }
 
+        // Reset session
         if (msg.type === 'new_session') {
           context.agent.resetConversation();
           return;
         }
 
+        // --- Direct message (1-on-1) ---
         if (msg.type === 'message') {
-          // Acknowledge receipt immediately
           ws.send(JSON.stringify({ type: 'ack', id: msg.id }));
 
           try {
@@ -127,25 +132,116 @@ module.exports = {
               attachments: msg.attachments,
               channelId: 'ppclaw',
               messageId: msg.id,
+              provider: 'ppclaw',
+              metadata: {
+                chatType: 'dm',
+                selfId: agentId,
+                selfName: agentName,
+                senderId: msg.senderId,
+                senderType: 'user',
+                senderName: msg.senderName || 'User',
+              },
             });
 
-            ws.send(
-              JSON.stringify({
-                type: 'reply',
-                replyTo: msg.id,
-                content: reply.content,
-                attachments: reply.attachments,
-              })
-            );
+            ws.send(JSON.stringify({
+              type: 'reply',
+              replyTo: msg.id,
+              content: reply.content,
+              attachments: reply.attachments,
+            }));
           } catch (err) {
             console.error('[ppclaw] Error processing message:', err.message);
-            ws.send(
-              JSON.stringify({
-                type: 'reply',
-                replyTo: msg.id,
-                content: 'Sorry, an error occurred while processing your message.',
-              })
-            );
+            ws.send(JSON.stringify({
+              type: 'reply',
+              replyTo: msg.id,
+              content: 'Sorry, an error occurred while processing your message.',
+            }));
+          }
+        }
+
+        // --- Group message ---
+        if (msg.type === 'group_message') {
+          ws.send(JSON.stringify({ type: 'ack', id: msg.id }));
+
+          try {
+            const reply = await context.agent.processMessage({
+              content: msg.content,
+              attachments: msg.attachments,
+              channelId: 'ppclaw',
+              messageId: msg.id,
+              // Key: group session routing
+              from: `ppclaw:group:${msg.groupId}`,
+              chatType: 'group',
+              provider: 'ppclaw',
+              metadata: {
+                chatType: 'group',
+                selfId: agentId,
+                selfName: agentName,
+                groupId: msg.groupId,
+                groupName: msg.groupName,
+                senderId: msg.senderId,
+                senderType: msg.senderType,
+                senderName: msg.senderName,
+                isMentioned: msg.isMentioned,
+                groupContext: {
+                  owner: msg.groupOwner,
+                  agents: msg.groupAgents,
+                },
+              },
+            });
+
+            ws.send(JSON.stringify({
+              type: 'group_reply',
+              replyTo: msg.id,
+              groupId: msg.groupId,
+              content: reply.content,
+              attachments: reply.attachments,
+            }));
+          } catch (err) {
+            console.error('[ppclaw] Error processing group message:', err.message);
+            ws.send(JSON.stringify({
+              type: 'group_reply',
+              replyTo: msg.id,
+              groupId: msg.groupId,
+              content: 'Sorry, an error occurred while processing your message.',
+            }));
+          }
+        }
+
+        // --- Bot-to-bot DM ---
+        if (msg.type === 'bot_dm') {
+          try {
+            const sessionKey = msg.taskId
+              ? `ppclaw:task:${msg.taskId}:peer:${msg.fromAgentId}`
+              : `ppclaw:dm:${msg.fromAgentId}`;
+
+            const reply = await context.agent.processMessage({
+              content: msg.content,
+              channelId: 'ppclaw',
+              messageId: msg.id,
+              from: sessionKey,
+              chatType: 'dm',
+              provider: 'ppclaw',
+              metadata: {
+                chatType: 'bot_dm',
+                selfId: agentId,
+                selfName: agentName,
+                fromAgentId: msg.fromAgentId,
+                fromAgentName: msg.fromAgentName,
+                senderType: 'agent',
+                taskId: msg.taskId,
+              },
+            });
+
+            ws.send(JSON.stringify({
+              type: 'bot_dm_reply',
+              replyTo: msg.id,
+              targetAgentId: msg.fromAgentId,
+              taskId: msg.taskId,
+              content: reply.content,
+            }));
+          } catch (err) {
+            console.error('[ppclaw] Error processing bot DM:', err.message);
           }
         }
       });
