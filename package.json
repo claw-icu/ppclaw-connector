@@ -1,0 +1,9 @@
+{
+  "name": "ppclaw-connector",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin — connects to ppclaw relay for WeChat mini program messaging",
+  "main": "index.js",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
