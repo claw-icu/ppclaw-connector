@@ -1,4 +1,10 @@
 const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+// UUID validation regex
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 module.exports = {
   name: 'ppclaw-connector',
@@ -14,6 +20,94 @@ module.exports = {
     // Get agent info
     const agentId = context.agent?.id || 'main';
     const agentName = context.agent?.name || config.agentName || 'Agent';
+
+    // --- Notes storage ---
+    const NOTES_DIR = path.join(os.homedir(), '.openclaw', 'agents', agentId, 'ppclaw-notes');
+
+    // Ensure notes directory exists
+    if (!fs.existsSync(NOTES_DIR)) {
+      fs.mkdirSync(NOTES_DIR, { recursive: true });
+    }
+
+    // Sanitize groupId to prevent path traversal
+    function sanitizeGroupId(groupId) {
+      if (typeof groupId !== 'string' || !UUID_REGEX.test(groupId.trim())) {
+        throw new Error('Invalid group ID format');
+      }
+      return groupId.trim().toLowerCase();
+    }
+
+    // Get safe notes path
+    function getNotesPath(groupId) {
+      const safeId = sanitizeGroupId(groupId);
+      const notesPath = path.join(NOTES_DIR, `group-${safeId}.md`);
+      const resolved = path.resolve(notesPath);
+      if (!resolved.startsWith(path.resolve(NOTES_DIR))) {
+        throw new Error('Invalid notes path');
+      }
+      return resolved;
+    }
+
+    // Read group notes
+    function readGroupNotes(groupId) {
+      try {
+        const notesPath = getNotesPath(groupId);
+        if (fs.existsSync(notesPath)) {
+          return fs.readFileSync(notesPath, 'utf-8');
+        }
+      } catch (err) {
+        console.error('[ppclaw] Error reading notes:', err.message);
+      }
+      return '';
+    }
+
+    // Write group notes
+    function writeGroupNotes(groupId, content) {
+      try {
+        const notesPath = getNotesPath(groupId);
+        // Limit notes size (100KB)
+        if (content.length > 100 * 1024) {
+          throw new Error('Notes content too large (max 100KB)');
+        }
+        fs.writeFileSync(notesPath, content, 'utf-8');
+        return true;
+      } catch (err) {
+        console.error('[ppclaw] Error writing notes:', err.message);
+        throw err;
+      }
+    }
+
+    // Current group context for tool calls
+    let currentGroupId = null;
+
+    // Register update_group_notes tool if supported
+    if (typeof context.registerTool === 'function') {
+      context.registerTool({
+        name: 'update_group_notes',
+        description: 'Update the project notes for the current group. Use this to track tasks, decisions, and project status.',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The complete notes content in markdown format',
+            },
+          },
+          required: ['content'],
+        },
+        handler: async ({ content }) => {
+          if (!currentGroupId) {
+            return { success: false, error: 'Not in a group context' };
+          }
+          try {
+            writeGroupNotes(currentGroupId, content);
+            return { success: true, message: 'Notes updated successfully' };
+          } catch (err) {
+            return { success: false, error: err.message };
+          }
+        },
+      });
+    }
 
     // Fetch relay.json from discovery URL
     async function fetchRelays() {
@@ -125,6 +219,7 @@ module.exports = {
         // --- Direct message (1-on-1) ---
         if (msg.type === 'message') {
           ws.send(JSON.stringify({ type: 'ack', id: msg.id }));
+          currentGroupId = null; // Not in a group
 
           try {
             const reply = await context.agent.processMessage({
@@ -163,6 +258,12 @@ module.exports = {
         if (msg.type === 'group_message') {
           ws.send(JSON.stringify({ type: 'ack', id: msg.id }));
 
+          // Set current group for tool calls
+          currentGroupId = msg.groupId;
+
+          // Read group notes
+          const groupNotes = readGroupNotes(msg.groupId);
+
           try {
             const reply = await context.agent.processMessage({
               content: msg.content,
@@ -187,6 +288,8 @@ module.exports = {
                   owner: msg.groupOwner,
                   agents: msg.groupAgents,
                 },
+                // Inject group notes
+                groupNotes: groupNotes,
               },
             });
 
@@ -205,11 +308,15 @@ module.exports = {
               groupId: msg.groupId,
               content: 'Sorry, an error occurred while processing your message.',
             }));
+          } finally {
+            currentGroupId = null;
           }
         }
 
         // --- Bot-to-bot DM ---
         if (msg.type === 'bot_dm') {
+          currentGroupId = null; // Not in a group
+
           try {
             const sessionKey = msg.taskId
               ? `ppclaw:task:${msg.taskId}:peer:${msg.fromAgentId}`

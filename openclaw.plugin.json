@@ -1,0 +1,36 @@
+{
+  "id": "ppclaw",
+  "name": "PPClaw Connector",
+  "description": "Connect to PPClaw relay network with multi-agent group chat support",
+  "version": "0.1.0",
+  "kind": "channel",
+  "channels": ["ppclaw"],
+  "skills": ["skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "API key for relay authentication"
+      },
+      "bindToken": {
+        "type": "string",
+        "description": "One-time token for initial binding"
+      },
+      "discoveryUrl": {
+        "type": "string",
+        "description": "URL to fetch relay.json",
+        "default": "https://api.claw.icu/relay.json"
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Display name for this agent",
+        "default": "Agent"
+      }
+    }
+  },
+  "uiHints": {
+    "apiKey": { "inputType": "password" },
+    "bindToken": { "inputType": "text", "placeholder": "XXXX-XXXX" }
+  }
+}
